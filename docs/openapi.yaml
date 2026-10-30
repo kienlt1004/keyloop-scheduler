@@ -1,0 +1,179 @@
+openapi: 3.0.3
+info:
+  title: Keyloop Unified Service Scheduler
+  version: v1
+  description: >
+    Books service appointments by allocating a free service bay AND a qualified technician for the
+    whole service duration. All instants are UTC (ISO 8601). Errors are RFC 7807 problem details.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/appointments:
+    post:
+      tags: [Appointments]
+      summary: Book a service appointment
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Makes retries safe. Same key + same request returns the original appointment (200).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAppointmentRequest' }
+      responses:
+        '201':
+          description: Appointment confirmed
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Appointment' }
+        '200':
+          description: Idempotent replay of an earlier successful request
+          headers:
+            Idempotent-Replayed: { schema: { type: string, example: 'true' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Appointment' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: No free bay + qualified technician for the whole duration, or the vehicle is already booked
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: Validation failure (past time, outside opening hours, misaligned slot, vehicle not owned by customer, idempotency key reused)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      tags: [Appointments]
+      summary: List appointments
+      parameters:
+        - { name: customerId, in: query, schema: { type: string, format: uuid } }
+        - { name: dealershipId, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: take, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Appointments ordered by start time
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Appointment' }
+  /api/v1/appointments/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Appointments]
+      summary: Get an appointment
+      responses:
+        '200':
+          description: The appointment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Appointment' }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Appointments]
+      summary: Cancel an appointment (idempotent; frees its bay and technician)
+      responses:
+        '200':
+          description: The cancelled appointment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Appointment' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /api/v1/dealerships/{dealershipId}/availability:
+    get:
+      tags: [Availability]
+      summary: Bookable start times for a service on a dealership-local date
+      parameters:
+        - { name: dealershipId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: serviceTypeId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: date, in: query, required: true, schema: { type: string, format: date, example: '2026-11-03' } }
+      responses:
+        '200':
+          description: Free slots
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Availability' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness
+      responses: { '200': { description: Process is up } }
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness (PostgreSQL reachable)
+      responses:
+        '200': { description: Ready }
+        '503': { description: Not ready }
+components:
+  responses:
+    Problem:
+      description: Problem details
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    CreateAppointmentRequest:
+      type: object
+      required: [customerId, vehicleId, dealershipId, serviceTypeId, startTime]
+      properties:
+        customerId: { type: string, format: uuid }
+        vehicleId: { type: string, format: uuid }
+        dealershipId: { type: string, format: uuid }
+        serviceTypeId: { type: string, format: uuid }
+        startTime:
+          type: string
+          format: date-time
+          description: Desired start. Any offset accepted; normalised to UTC. Must be 15-minute aligned and within local opening hours.
+          example: '2026-11-03T09:00:00Z'
+    Appointment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        vehicleId: { type: string, format: uuid }
+        dealershipId: { type: string, format: uuid }
+        serviceTypeId: { type: string, format: uuid }
+        serviceBayId: { type: string, format: uuid }
+        technicianId: { type: string, format: uuid }
+        startUtc: { type: string, format: date-time }
+        endUtc: { type: string, format: date-time }
+        status: { type: string, enum: [Confirmed, Cancelled] }
+        createdUtc: { type: string, format: date-time }
+    Availability:
+      type: object
+      properties:
+        dealershipId: { type: string, format: uuid }
+        serviceTypeId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        timeZoneId: { type: string, example: Europe/London }
+        slots:
+          type: array
+          items:
+            type: object
+            properties:
+              startUtc: { type: string, format: date-time }
+              endUtc: { type: string, format: date-time }
+    Problem:
+      type: object
+      properties:
+        type: { type: string, example: 'urn:keyloop:scheduler:no-capacity' }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        traceId: { type: string }
+        errors:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
