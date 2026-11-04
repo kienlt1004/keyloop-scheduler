@@ -6,3 +6,5 @@ obj/
 TestResults/
 *.log
 .env
+# Large binary — host externally (see README for link)
+*.mp4

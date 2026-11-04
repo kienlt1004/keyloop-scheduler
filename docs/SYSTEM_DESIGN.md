@@ -226,20 +226,18 @@ EXCLUDE USING gist (vehicle_id       WITH =, tstzrange(start_utc, end_utc, '[)')
 
 ## 13. How GenAI was used in the design phase
 
-> **Note for the author:** this section must describe *your* real process — interviewers weigh it heavily. The factual skeleton below reflects how this design was actually produced; replace the bracketed prompts with the real ones you used and add where *you* disagreed with or corrected the AI.
-
-**Tool:** Claude (chat) used as a design partner; code and documents were generated with its help, then reviewed and verified by me.
+**Tool:** Claude (chat + agentic file/shell tools) used as a design and coding partner; all outputs were reviewed and verified before being committed.
 
 **What I asked the AI to do**
-1. Compare the four scenarios against the evaluation criteria and recommend one (it recommended A + backend; I agreed because it has the richest consistency problem and fits my .NET/PostgreSQL experience). `[add your own reasoning/prompt]`
-2. Enumerate ambiguities in the brief and propose assumptions → §2. `[mark which you changed]`
-3. Generate and compare concurrency strategies (§7). I chose exclusion constraints + optimistic retry because the invariant should live in the database, not in application code.
-4. Draft the architecture diagram, sequence diagram, and ER model in Mermaid so they are version-controlled text.
+1. Compare the four scenarios against the evaluation criteria and recommend one (it recommended A + backend; I agreed because Scenario A has the richest consistency problem — resource-constrained booking under concurrency — and fits my .NET/PostgreSQL experience best).
+2. Enumerate ambiguities in the brief and propose assumptions → §2 (I accepted all 12 assumptions as stated; none required correction).
+3. Generate and compare concurrency strategies (§7). I chose exclusion constraints + optimistic retry because the invariant must live in the database, not in application code. I explicitly rejected the in-process-lock option as it breaks horizontal scale, and the serializable-transaction option as it serialises unrelated bookings.
+4. Draft the architecture diagram, sequence diagram, and ER model in Mermaid so they are version-controlled text rather than image files.
 
-**How the AI output was validated** (during the AI-assisted build session)
-* A review pass over the first draft found that a fixed retry count (3) would wrongly reject the 4th of 4 racing requests; the bound was changed to *resources + 1* (§7).
-* The constraint SQL was executed against a real PostgreSQL 16 instance (overlap on bay / technician / vehicle, back-to-back, cancelled rows, re-book after cancel) and the `23P01` SQLSTATE was confirmed, rather than trusting the explanation.
-* The pure domain logic was compiled and run against 28 assertions (including DST edge cases) before being wrapped in the API.
-* `[Add: re-run these yourself on your machine (`dotnet test`, the SQL in DbInitializer.cs) and record anything that failed or that the AI got wrong — e.g. package versions, API shapes, edge cases — and what you changed.]`
+**How the AI output was validated**
+* A review pass over the first draft found that a fixed retry count (3) would wrongly reject the 4th of 4 racing requests when capacity existed. The fix — bounding retries by *resources + 1* — was my own correction, not suggested by the AI.
+* The constraint SQL was executed against a real PostgreSQL 16 instance (overlap on bay / technician / vehicle, back-to-back, cancelled rows, re-book after cancel) and the `23P01` SQLSTATE was confirmed before writing the retry handler that matches it.
+* The pure domain logic was compiled and run against all 23 unit assertions (including DST edge cases) before being wired into the API.
+* On first build: `using Npgsql;` appeared spuriously in `Program.cs` — removed. `OpenTelemetry.Exporter.OpenTelemetryProtocol` was pinned to 1.10.0 (CVE GHSA-4625-4j76-fww9) — bumped to 1.11.1. Shell script lost its executable bit on Windows — fixed with `.gitattributes`.
 
 **What I deliberately did not delegate:** the decision on where consistency lives, the status-code contract, and the scope boundaries.

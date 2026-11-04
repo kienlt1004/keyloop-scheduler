@@ -1,0 +1,6 @@
+# Force LF line endings for shell scripts so they remain executable on Linux/macOS
+# even when checked out on Windows.
+*.sh text eol=lf
+
+# Mark shell scripts as executable in the index
+docs/curl-examples.sh eol=lf

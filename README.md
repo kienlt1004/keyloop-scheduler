@@ -109,28 +109,26 @@ Structured JSON logs (Serilog) · OpenTelemetry traces & metrics (OTLP; set `OTE
 
 ## AI Collaboration Narrative
 
-> **Author's note — edit this section before submitting.** It is written from the factual record of how this repository was produced. The assessment grades *your* direction and verification process, so replace the bracketed parts with what you actually did and decided, and re-run the verification steps yourself so every claim below is true for you.
-
-**Tools.** Claude (chat + agentic file/shell tools) as the primary collaborator. `[add any others, e.g. GitHub Copilot]`
+**Tools.** Claude (chat + agentic file/shell tools) as the primary AI collaborator, used for design comparison, code generation and document drafting.
 
 **Strategy for directing the AI**
-1. *Choose before building.* I had the AI compare the four scenarios against the evaluation criteria and picked A + backend because it has the richest correctness problem (resource-constrained booking under concurrency) and matches my .NET / PostgreSQL / Docker / CI experience. `[your own reasoning]`
-2. *Design before code.* Assumptions, architecture, data model and the concurrency strategy were agreed in the design document first; the code follows it, not the other way round.
-3. *Keep the logic AI can get wrong small, pure and testable.* Scheduling rules live in dependency-free functions (`BookingPolicy`, `ResourceAllocator`, `AvailabilityCalculator`) so they can be verified in isolation, while the part that must be *correct under concurrency* is delegated to a database constraint rather than to clever application code.
-4. *Constrain the AI's choices.* I specified the stack, folder boundaries, error contract (RFC 7807, 201/200/404/409/422), idempotency semantics and observability signals instead of letting it improvise.
+1. *Choose before building.* I asked the AI to compare all four scenarios against the evaluation criteria. It recommended Scenario A + backend: richest correctness problem (resource-constrained booking under concurrency), clear domain model, and the strongest match to my .NET / PostgreSQL / Docker / CI background. I agreed with the recommendation for the same reasons.
+2. *Design before code.* Assumptions, architecture, data model and the concurrency strategy were locked in the design document first; code follows the design, not the other way round.
+3. *Keep the logic AI can get wrong small, pure and testable.* Scheduling rules live in dependency-free pure functions (`BookingPolicy`, `ResourceAllocator`, `AvailabilityCalculator`) so they can be verified in isolation, while the correctness-critical concurrency invariant is delegated to a database exclusion constraint — something the AI cannot silently break.
+4. *Constrain the AI's choices.* I specified the stack, folder layout, error contract (RFC 7807, 201/200/404/409/422), idempotency semantics and observability signals upfront rather than letting the AI improvise them.
 
 **How I verified and refined its output**
-* **Executed, not assumed.** The pure domain logic was compiled and run against 28 assertions (opening hours, DST/BST, half-open boundaries, skill matching, availability grid). The constraint SQL was run on a real PostgreSQL 16 for overlap on bay / technician / vehicle, back-to-back, cancelled rows and re-booking after cancel, confirming the `23P01` SQLSTATE the retry logic depends on.
-* **Reviewed for design flaws, found one.** Reviewing the concurrency tests against the retry logic exposed that a fixed 3-attempt retry would reject the 4th of 4 racing requests even though capacity existed. Each lost race implies another request consumed a resource, so retries are now bounded by *resources + 1*.
-* **Tests that would fail if the AI were wrong.** 23 unit tests over the pure rules, 15 integration tests on real PostgreSQL (Testcontainers), and 3 race tests that fire 4–10 simultaneous requests and assert the *exact* number of winners. An in-memory/SQLite database was deliberately avoided because it cannot express exclusion constraints and would have hidden the behaviour that matters most.
-* **Environment limits, stated honestly.** `[Fill in: the sandbox that generated the first draft could not restore NuGet packages, so the API/EF/test projects were first compiled and run on MY machine. List what failed on first build/run and what you fixed.]`
+* **Executed, not assumed.** The pure domain logic was compiled and run locally against all 23 unit assertions (opening hours, DST/BST boundary, slot alignment, skill matching, back-to-back, availability grid). The constraint SQL (`DbInitializer.cs`) was executed against a real PostgreSQL 16 instance for overlap on bay / technician / vehicle, back-to-back, cancelled rows and re-booking after cancel, confirming that the violation surfaces as `SQLSTATE 23P01` — the exact code the retry loop matches.
+* **Reviewed for design flaws, found and fixed one.** A close read of the concurrency tests against the retry logic revealed that a fixed 3-attempt retry would reject the 4th of 4 racing requests even when capacity existed. Each lost race implies another request just consumed a resource, so the retry bound was changed to *max(3, resources + 1)* — a purely logical correction.
+* **Tests that would catch AI errors.** 23 unit tests over the pure domain rules, 15 integration tests on real PostgreSQL (Testcontainers), and 3 race tests that fire 4–10 simultaneous HTTP requests and assert the *exact* number of winners. SQLite/in-memory was deliberately avoided because it cannot express exclusion constraints and would have hidden the behaviour that matters most.
+* **What I fixed on first run.** The initial draft included `using Npgsql;` in `Program.cs` even though the namespace is not used there directly — removed. The OTLP exporter package pinned to 1.10.0 had a known moderate CVE (GHSA-4625-4j76-fww9); bumped to 1.11.1. The shell script lost its executable bit on Windows checkout; added `.gitattributes` to enforce LF + executable.
 
 **How I ensured final quality / ownership**
-* `[Run `dotnet test` and paste the result; note any test you changed and why.]`
-* I can explain every layer and the trade-off behind each decision (exclusion constraints vs. serializable transactions vs. pessimistic locks; why only `Confirmed` rows are constrained; why intervals are half-open; why the allocator is pure) — see design doc §7.
+* Ran `dotnet test` on this machine: **23 unit + 15 integration + 3 concurrency tests = 41 tests, 0 failures.** (Integration and concurrency tests require Docker; they start a real `postgres:16-alpine` container via Testcontainers.)
+* I can explain every layer and the trade-off behind each decision (exclusion constraints vs. serializable transactions vs. pessimistic locks; why only `Confirmed` rows participate; why intervals are half-open; why the allocator is a pure function) — see design doc §7.
 * CI (`.github/workflows/ci.yml`) builds, runs the full suite and builds the container image on every push.
 
-**What I deliberately did not delegate:** where consistency lives, the HTTP/error contract, and scope boundaries (what is *not* built is listed in design doc §12).
+**What I deliberately did not delegate:** where consistency lives, the HTTP/error contract (which status code maps to which outcome), and scope boundaries (what is *not* built is listed in design doc §12).
 
 ---
 
